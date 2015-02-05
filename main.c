@@ -2,42 +2,48 @@
 #include <setupapi.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <wchar.h>
 //#include <cfgmgr32.h>   // for MAX_DEVICE_ID_LEN
 #define MAX_DEVICE_ID_LEN 200
 #pragma comment(lib, "setupapi.lib")
 
 #define NAME_SIZE 128
 
+#ifndef DISPLAY_DEVICE_ACTIVE
+#define DISPLAY_DEVICE_ACTIVE 0x00000001
+#endif
+
 const GUID GUID_CLASS_MONITOR = {0x4d36e96e, 0xe325, 0x11ce, 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18};
 
-void Get2ndSlashBlock(char *sIn, const char *DeviceID) {
-    char *strend = strchr(&DeviceID[9], (int) '\\');
-    const char *strstart = &DeviceID[8];
+void Get2ndSlashBlock(wchar_t *sIn, const wchar_t *DeviceID) {
+    wchar_t *strend = wcschr(&DeviceID[9], L'\\');
+    const wchar_t *strstart = &DeviceID[8];
     size_t size = strend - strstart;
-    memcpy(sIn, strstart, size);
-    sIn[size]='\0';
+    wmemcpy(sIn, strstart, size);
+    sIn[size]=L'\0';
 }
 
 // Assumes hEDIDRegKey is valid
 bool GetMonitorSizeFromEDID(const HKEY hEDIDRegKey, short *WidthMm, short *HeightMm) {
     DWORD dwType, AcutalValueNameLength = NAME_SIZE;
-    TCHAR valueName[NAME_SIZE];
+    wchar_t valueName[NAME_SIZE];
 
     BYTE EDIDdata[1024];
     DWORD edidsize = sizeof(EDIDdata);
 
-    LONG i, retValue;
+    DWORD i;
+    LONG retValue;
     for (i = 0, retValue = ERROR_SUCCESS; retValue != ERROR_NO_MORE_ITEMS; ++i) {
-        retValue = RegEnumValue(hEDIDRegKey, i, &valueName[0],
+        retValue = RegEnumValueW(hEDIDRegKey, i, &valueName[0],
                 &AcutalValueNameLength, NULL, &dwType,
                 EDIDdata, // buffer
                 &edidsize); // buffer size
 
-        if (retValue != ERROR_SUCCESS || 0 != strcmp(valueName, ("EDID")))
+        if (retValue != ERROR_SUCCESS || 0 != wcscmp(valueName, L"EDID"))
             continue;
 
-        *WidthMm = ((EDIDdata[68] & 0xF0) << 4) + EDIDdata[66];
-        *HeightMm = ((EDIDdata[68] & 0x0F) << 8) + EDIDdata[67];
+        *WidthMm = (short) (((EDIDdata[68] & 0xF0) << 4) + EDIDdata[66]);
+        *HeightMm = (short) (((EDIDdata[68] & 0x0F) << 8) + EDIDdata[67]);
 
         return true; // valid EDID found
     }
@@ -45,7 +51,7 @@ bool GetMonitorSizeFromEDID(const HKEY hEDIDRegKey, short *WidthMm, short *Heigh
     return false; // EDID not found
 }
 
-bool GetSizeForDevID(const char *TargetDevID, short *WidthMm, short *HeightMm) {
+bool GetSizeForDevID(const wchar_t *TargetDevID, short *WidthMm, short *HeightMm) {
     HDEVINFO devInfo = SetupDiGetClassDevsEx(
             &GUID_CLASS_MONITOR, //class GUID
             NULL, //enumerator
@@ -67,10 +73,10 @@ bool GetSizeForDevID(const char *TargetDevID, short *WidthMm, short *HeightMm) {
         devInfoData.cbSize = sizeof(devInfoData);
 
         if (SetupDiEnumDeviceInfo(devInfo, i, &devInfoData)) {
-            TCHAR Instance[MAX_DEVICE_ID_LEN];
-            SetupDiGetDeviceInstanceId(devInfo, &devInfoData, Instance, MAX_PATH, NULL);
+            WCHAR Instance[MAX_DEVICE_ID_LEN];
+            SetupDiGetDeviceInstanceIdW(devInfo, &devInfoData, Instance, MAX_PATH, NULL);
 
-            if (strstr(Instance, TargetDevID) == 0)
+            if (wcsstr(Instance, TargetDevID) == 0)
                 continue;
 
             HKEY hEDIDRegKey = SetupDiOpenDevRegKey(devInfo, &devInfoData,
@@ -88,91 +94,75 @@ bool GetSizeForDevID(const char *TargetDevID, short *WidthMm, short *HeightMm) {
     return bRes;
 }
 
-HMONITOR monitors[6];
-int monitor_size;
+struct DisplayInfo{
+    char name[20];
+    short physicalWidth_mm;
+    short physicalHeight_mm;
+};
 
-BOOL CALLBACK MyMonitorEnumProc(
-        HMONITOR hMonitor,
-        HDC hdcMonitor,
-        LPRECT lprcMonitor,
-        LPARAM dwData
-) {
-// Use this function to identify the monitor of interest: MONITORINFO contains the Monitor RECT.
-    MONITORINFOEX mi;
-    mi.cbSize = sizeof(MONITORINFOEX);
+struct DisplayInfo* getDisplayInfos(int *count)
+{
 
-    GetMonitorInfo(hMonitor, &mi);
-    OutputDebugString(mi.szDevice);
+    int size = 0, found = 0;
+    struct DisplayInfo *monitors= NULL;
+    DWORD adapterIndex, displayIndex;
 
-// For simplicity, we set the last monitor to be the one of interest
-    monitors[monitor_size++] = hMonitor;
+    *count = 0;
 
-    return TRUE;
-}
+    for (adapterIndex = 0;  ;  adapterIndex++)
+    {
+        DISPLAY_DEVICEW adapter;
 
-BOOL DisplayDeviceFromHMonitor(HMONITOR hMonitor, DISPLAY_DEVICE *ddMonOut) {
-    MONITORINFOEX mi;
-    mi.
-            cbSize = sizeof(MONITORINFOEX);
-    GetMonitorInfo(hMonitor,&mi);
+        ZeroMemory(&adapter, sizeof(DISPLAY_DEVICEW));
+        adapter.cb = sizeof(DISPLAY_DEVICEW);
 
-    DISPLAY_DEVICE dd;
-    dd.
-            cb = sizeof(dd);
-    DWORD devIdx = 0; // device index
+        if (!EnumDisplayDevicesW(NULL, adapterIndex, &adapter, 0))
+            break;
 
-    char *DeviceID;
-    bool bFoundDevice = false;
-    while (EnumDisplayDevices(0, devIdx, &dd, 0)) {
-        devIdx++;
-        if (0 !=strcmp(dd.DeviceName, mi.szDevice))
+        if (!(adapter.StateFlags & DISPLAY_DEVICE_ACTIVE))
             continue;
 
-        DISPLAY_DEVICE ddMon;
-        ZeroMemory(&ddMon, sizeof(ddMon));
-        ddMon.
-                cb = sizeof(ddMon);
-        DWORD MonIdx = 0;
+        for (displayIndex = 0;  ;  displayIndex++)
+        {
+            DISPLAY_DEVICEW display;
 
-        while (EnumDisplayDevices(dd.DeviceName, MonIdx, &ddMon, 0)) {
-            MonIdx++;
+            ZeroMemory(&display, sizeof(DISPLAY_DEVICEW));
+            display.cb = sizeof(DISPLAY_DEVICEW);
 
-            *ddMonOut = ddMon;
-            return TRUE;
+            if (!EnumDisplayDevicesW(adapter.DeviceName, displayIndex, &display, 0))
+                break;
 
-            ZeroMemory(&ddMon, sizeof(ddMon));
-            ddMon.
-                    cb = sizeof(ddMon);
+            if (found == size)
+            {
+                size += 4;
+                monitors = realloc(monitors, sizeof(struct DisplayInfo) * size);
+            }
+
+            struct DisplayInfo displayInfo;
+            wcstombs(displayInfo.name, display.DeviceString, 20);
+            displayInfo.name[20-1] = L'\0';
+            const size_t key_size = 20;
+            wchar_t key[key_size];
+            Get2ndSlashBlock(key, display.DeviceID);
+            GetSizeForDevID(key, &displayInfo.physicalWidth_mm, &displayInfo.physicalHeight_mm);
+            monitors[found] = displayInfo;
+
+            found++;
         }
-
-        ZeroMemory(&dd, sizeof(dd));
-        dd.
-                cb = sizeof(dd);
     }
 
-    return FALSE;
+    *count = found;
+    return monitors;
 }
 
 int main(int argc, char *argv[]) {
-    char DeviceID[10];
-    monitor_size = 0;
-    // Identify the HMONITOR of interest via the callback MyMonitorEnumProc
-    EnumDisplayMonitors(NULL, NULL, MyMonitorEnumProc, NULL);
-
-    DISPLAY_DEVICE ddMon;
-    if (monitor_size == 0)
-        return 1;
+    int                size;
+    struct DisplayInfo *displayInfos = getDisplayInfos(&size);
 
     int i;
-    for (i = 0; i < monitor_size; i++) {
-        if (FALSE == DisplayDeviceFromHMonitor(monitors[i], &ddMon))
-            return 1;
-
-        Get2ndSlashBlock(DeviceID, ddMon.DeviceID);
-
-        short WidthMm, HeightMm;
-        bool bFoundDevice = GetSizeForDevID(DeviceID, &WidthMm, &HeightMm);
-        printf("%s: width: %d, height: %d\n", ddMon.DeviceString, WidthMm, HeightMm);
+    for (i = 0; i < size; i++) {
+        printf("%s: width: %d, height: %d\n", displayInfos[i].name, displayInfos[i].physicalWidth_mm, displayInfos[i].physicalHeight_mm);
     }
+    free(displayInfos);
     return 0;
 }
