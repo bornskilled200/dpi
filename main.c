@@ -12,13 +12,13 @@ const GUID GUID_CLASS_MONITOR = {0x4d36e96e, 0xe325, 0x11ce, 0xbf, 0xc1, 0x08, 0
 
 void Get2ndSlashBlock(char *sIn, const char *DeviceID) {
     puts(DeviceID);
-    char *strend = strchr(&DeviceID[9], (int) '\\') - 8;
+    char *strend = strchr(&DeviceID[9], (int) '\\');
     const char *strstart = &DeviceID[8];
-    size_t size = sizeof(strend - strstart);
+    size_t size = strend - strstart;
     memset(sIn, 0, size + 1);
     memcpy(sIn, strstart, size);
     printf("size: %u\n", size);
-    puts(DeviceID);
+    puts(sIn);
     fflush(stdout);
 }
 
@@ -40,6 +40,7 @@ bool GetMonitorSizeFromEDID(const HKEY hEDIDRegKey, short *WidthMm, short *Heigh
         if (retValue != ERROR_SUCCESS || 0 != strcmp(valueName, ("EDID")))
             continue;
 
+        printf("reg %d\n", i);
         *WidthMm = ((EDIDdata[68] & 0xF0) << 4) + EDIDdata[66];
         *HeightMm = ((EDIDdata[68] & 0x0F) << 8) + EDIDdata[67];
 
@@ -74,7 +75,7 @@ bool GetSizeForDevID(const char *TargetDevID, short *WidthMm, short *HeightMm) {
             TCHAR Instance[MAX_DEVICE_ID_LEN];
             SetupDiGetDeviceInstanceId(devInfo, &devInfoData, Instance, MAX_PATH, NULL);
 
-            if (strstr(Instance, TargetDevID))
+            if (strstr(Instance, TargetDevID) == 0)
                 continue;
 
             HKEY hEDIDRegKey = SetupDiOpenDevRegKey(devInfo, &devInfoData,
@@ -83,6 +84,7 @@ bool GetSizeForDevID(const char *TargetDevID, short *WidthMm, short *HeightMm) {
             if (!hEDIDRegKey || (hEDIDRegKey == INVALID_HANDLE_VALUE))
                 continue;
 
+            printf("Device %s\n", TargetDevID);
             bRes = GetMonitorSizeFromEDID(hEDIDRegKey, WidthMm, HeightMm);
 
             RegCloseKey(hEDIDRegKey);
@@ -92,7 +94,7 @@ bool GetSizeForDevID(const char *TargetDevID, short *WidthMm, short *HeightMm) {
     return bRes;
 }
 
-HMONITOR g_hMonitor[20];
+HMONITOR g_hMonitor[6];
 int g_hMonitor_size;
 
 BOOL CALLBACK MyMonitorEnumProc(
@@ -166,7 +168,6 @@ BOOL DisplayDeviceFromHMonitor(HMONITOR hMonitor, DISPLAY_DEVICE
 
 int main(int argc, char *argv[]) {
     char DeviceID[10];
-    memset(g_hMonitor, 0, 20);
     g_hMonitor_size = 0;
     // Identify the HMONITOR of interest via the callback MyMonitorEnumProc
     EnumDisplayMonitors(NULL, NULL, MyMonitorEnumProc, NULL);
