@@ -11,15 +11,11 @@
 const GUID GUID_CLASS_MONITOR = {0x4d36e96e, 0xe325, 0x11ce, 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18};
 
 void Get2ndSlashBlock(char *sIn, const char *DeviceID) {
-    puts(DeviceID);
     char *strend = strchr(&DeviceID[9], (int) '\\');
     const char *strstart = &DeviceID[8];
     size_t size = strend - strstart;
-    memset(sIn, 0, size + 1);
     memcpy(sIn, strstart, size);
-    printf("size: %u\n", size);
-    puts(sIn);
-    fflush(stdout);
+    sIn[size]='\0';
 }
 
 // Assumes hEDIDRegKey is valid
@@ -40,7 +36,6 @@ bool GetMonitorSizeFromEDID(const HKEY hEDIDRegKey, short *WidthMm, short *Heigh
         if (retValue != ERROR_SUCCESS || 0 != strcmp(valueName, ("EDID")))
             continue;
 
-        printf("reg %d\n", i);
         *WidthMm = ((EDIDdata[68] & 0xF0) << 4) + EDIDdata[66];
         *HeightMm = ((EDIDdata[68] & 0x0F) << 8) + EDIDdata[67];
 
@@ -84,7 +79,6 @@ bool GetSizeForDevID(const char *TargetDevID, short *WidthMm, short *HeightMm) {
             if (!hEDIDRegKey || (hEDIDRegKey == INVALID_HANDLE_VALUE))
                 continue;
 
-            printf("Device %s\n", TargetDevID);
             bRes = GetMonitorSizeFromEDID(hEDIDRegKey, WidthMm, HeightMm);
 
             RegCloseKey(hEDIDRegKey);
@@ -94,14 +88,14 @@ bool GetSizeForDevID(const char *TargetDevID, short *WidthMm, short *HeightMm) {
     return bRes;
 }
 
-HMONITOR g_hMonitor[6];
-int g_hMonitor_size;
+HMONITOR monitors[6];
+int monitor_size;
 
 BOOL CALLBACK MyMonitorEnumProc(
-         HMONITOR hMonitor,
-         HDC hdcMonitor,
-         LPRECT lprcMonitor,
-         LPARAM dwData
+        HMONITOR hMonitor,
+        HDC hdcMonitor,
+        LPRECT lprcMonitor,
+        LPARAM dwData
 ) {
 // Use this function to identify the monitor of interest: MONITORINFO contains the Monitor RECT.
     MONITORINFOEX mi;
@@ -111,19 +105,16 @@ BOOL CALLBACK MyMonitorEnumProc(
     OutputDebugString(mi.szDevice);
 
 // For simplicity, we set the last monitor to be the one of interest
-    g_hMonitor[g_hMonitor_size++] = hMonitor;
+    monitors[monitor_size++] = hMonitor;
 
     return TRUE;
 }
 
-BOOL DisplayDeviceFromHMonitor(HMONITOR hMonitor, DISPLAY_DEVICE
-
-*ddMonOut) {
+BOOL DisplayDeviceFromHMonitor(HMONITOR hMonitor, DISPLAY_DEVICE *ddMonOut) {
     MONITORINFOEX mi;
     mi.
             cbSize = sizeof(MONITORINFOEX);
-    GetMonitorInfo(hMonitor,
-            &mi);
+    GetMonitorInfo(hMonitor,&mi);
 
     DISPLAY_DEVICE dd;
     dd.
@@ -134,9 +125,7 @@ BOOL DisplayDeviceFromHMonitor(HMONITOR hMonitor, DISPLAY_DEVICE
     bool bFoundDevice = false;
     while (EnumDisplayDevices(0, devIdx, &dd, 0)) {
         devIdx++;
-        if (0 !=
-                strcmp(dd
-                        .DeviceName, mi.szDevice))
+        if (0 !=strcmp(dd.DeviceName, mi.szDevice))
             continue;
 
         DISPLAY_DEVICE ddMon;
@@ -145,9 +134,7 @@ BOOL DisplayDeviceFromHMonitor(HMONITOR hMonitor, DISPLAY_DEVICE
                 cb = sizeof(ddMon);
         DWORD MonIdx = 0;
 
-        while (
-                EnumDisplayDevices(dd
-                        .DeviceName, MonIdx, &ddMon, 0)) {
+        while (EnumDisplayDevices(dd.DeviceName, MonIdx, &ddMon, 0)) {
             MonIdx++;
 
             *ddMonOut = ddMon;
@@ -168,24 +155,24 @@ BOOL DisplayDeviceFromHMonitor(HMONITOR hMonitor, DISPLAY_DEVICE
 
 int main(int argc, char *argv[]) {
     char DeviceID[10];
-    g_hMonitor_size = 0;
+    monitor_size = 0;
     // Identify the HMONITOR of interest via the callback MyMonitorEnumProc
     EnumDisplayMonitors(NULL, NULL, MyMonitorEnumProc, NULL);
 
     DISPLAY_DEVICE ddMon;
-    if (g_hMonitor_size == 0)
+    if (monitor_size == 0)
         return 1;
 
     int i;
-    for (i = 0; i<g_hMonitor_size; i++) {
-        if (FALSE == DisplayDeviceFromHMonitor(g_hMonitor[i], &ddMon))
+    for (i = 0; i < monitor_size; i++) {
+        if (FALSE == DisplayDeviceFromHMonitor(monitors[i], &ddMon))
             return 1;
 
         Get2ndSlashBlock(DeviceID, ddMon.DeviceID);
 
         short WidthMm, HeightMm;
         bool bFoundDevice = GetSizeForDevID(DeviceID, &WidthMm, &HeightMm);
-        printf("width: %d, height: %d", WidthMm, HeightMm);
+        printf("%s: width: %d, height: %d\n", ddMon.DeviceString, WidthMm, HeightMm);
     }
     return 0;
 }
